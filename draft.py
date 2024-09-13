@@ -1,39 +1,32 @@
+import asyncio
+import datetime
 import threading
 
-condition_a = threading.Condition()
-condition_b = threading.Condition()
-a_ready = False
-b_ready = False
-
-def thread_a():
-    global b_ready
-    print('a线程开始执行')
-    with condition_a:
-        while not a_ready:
-            condition_a.wait()
-    # 执行 A 线程的操作
-    with condition_b:
-        b_ready = True
-        condition_b.notify()
-
-def thread_b():
-    global a_ready
-    # 执行 B 线程的初始操作
-    print('b线程开始执行')
-    # 执行 B 线程后续操作
-    with condition_a:
-        a_ready = True
-        condition_a.notify()
-    with condition_b:
-        while not b_ready:
-            condition_b.wait()
+c_a = asyncio.Condition()
+c_b = asyncio.Condition()
 
 
-t1 = threading.Thread(target=thread_a)
-t2 = threading.Thread(target=thread_b)
+async def a():
+    print('a协程被执行', datetime.datetime.now())
+    print('aaaaaaaaaaa')
+    async with c_a:
+        await c_a.wait()
+    print('a协程执行完毕')
 
-t1.start()
-t2.start()
 
-t1.join()
-t2.join()
+async def b():
+    print('b协程被执行', datetime.datetime.now())
+    await asyncio.sleep(0.5)  # 添加一些延迟
+    print('bbbbbbbbbbbb')
+    async with c_a:
+        c_a.notify()
+    print('b协程执行完毕')
+
+
+async def r():
+    a_s = asyncio.create_task(a())
+    b_s = asyncio.create_task(b())
+    await asyncio.gather(a_s, b_s)
+
+
+asyncio.run(r())

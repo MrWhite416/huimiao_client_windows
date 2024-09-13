@@ -26,6 +26,7 @@ class Controller:
         self.key = ''
         self.remark = ''
         self.canvas = None
+        self.client_me = None
 
     def init(self, ui):
         """
@@ -64,11 +65,13 @@ class Controller:
                         self.ui.connect_fail()
 
                     elif self.client_me.connect_result == 'success':
-                        # 连接成功
+                        # 提示 连接成功
                         self.ui.connect_success()
 
                         def close_w(e):
+
                             if e.widget == wait_w:
+                                print('触发了关闭事件')
                                 """只有当触发销毁事件的组件是wait_w时"""
                                 """
                                 由于tkinter中的事件传播机制，子组件的destory事件会向上传播到父组件（别的事件不会）
@@ -77,14 +80,19 @@ class Controller:
                                 """
 
 
-                                # # 开一个新线程等待画布组件出现，接收消息操作才能继续执行
+                                # 开一个新线程等待画布组件出现，接收消息操作才能继续执行
                                 def wait_canvas():
-                                    while not self.canvas:
+                                    flag = True
+                                    while flag:
                                         if self.canvas:
-                                            self.client_me.q.put(self.receive_msg)
+                                            flag = False
+                                            self.client_me.q.put(self.receive_msg)  # 接收消息
+                                            self.client_me.q.put(self.ui.on_canvas_configure)  # 更新画布
+                                            self.client_me.q.put(self.canvas)
                                             with self.client_me.condition_c:
                                                 self.client_me.ready_c = True
                                                 self.client_me.condition_c.notify()  # 通知后端线程可以继续执行
+                                                print('已经通知接收后端继续执行')
 
                                 t_1 = threading.Thread(target=wait_canvas)
                                 t_1.start()
@@ -175,6 +183,20 @@ class Controller:
         content = text_box.get("1.0", "end-1c")
         self.add_msgui(e, content)
 
+        # 通过队列传入后端
+        self.client_me.q.put(content)
+
+        loop = asyncio.new_event_loop()  # 创建一个事件循环
+
+        notify_ex = self.notify_thread()  # 通知协程对象可以继续执行的协程任务
+        t = threading.Thread(target=self.new_loop,args=(loop,))  # 将事件循环跑起来
+        t.start()
+
+        asyncio.run_coroutine_threadsafe(notify_ex,loop=loop)  # 将协程任务添加到事件循环
+
+
+        print('将内容存入了q')
+
         # 清空多行文本框
         text_box.delete("1.0", "end")
 
@@ -206,3 +228,12 @@ class Controller:
         '''前端展示'''
         self.ui.recv_msg(self.canvas, msg, y)
         print('发送了消息到前端')
+
+    def new_loop(self,loop):
+        asyncio.set_event_loop(loop)
+        loop.run_forever()
+        return loop
+
+    async def notify_thread(self):
+        async with self.client_me.condition_b:
+            self.client_me.condition_b.notify()

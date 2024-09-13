@@ -29,16 +29,29 @@ class RunClient(object):
 
     def __init__(self, win, ip, port, key):
         super().__init__()
+        self.user_input = None
         self.q = queue.Queue()
         self.condition_c = threading.Condition()
+        self.condition_b = asyncio.Condition()
         self.ready_c = False
+        self.ready_send = False
         self.win = win
         self.ip = ip
         self.port = port
         self.key = key
         self.loop = None
         self.connect_result = None
+        self.websocket = None
         self.run()
+
+    def gain_user_input(self):
+        """获取前端用户发送的消息"""
+        try:
+            content = self.q.get(timeout=1)
+            return content
+        except queue.Empty:
+            print('The queue is empty!')
+            return None
 
     async def receive_messages(self, websocket):
         """接收并处理服务器消息"""
@@ -49,6 +62,7 @@ class RunClient(object):
                     return
                 print("连接还在")
                 response = await websocket.recv()
+                print('接收到消息')
                 response = json.loads(response)
 
                 # 发送者的用户名
@@ -63,8 +77,24 @@ class RunClient(object):
                 print("Connection with server closed")
                 break
 
-    async def send_messages(self, websocket):
-        print('发送消息')
+    async def send_messages(self):
+        """处理用户输入并发送消息到服务器"""
+        print('发送函数开始执行',datetime.datetime.now())
+        while True:
+            async with self.condition_b:
+                await self.condition_b.wait()
+
+            content = self.gain_user_input()
+            if not content:
+                continue
+            print(content)
+            message = {
+                "sender": "lsy",
+                "type": "message",
+                "content": content,
+                "time": "2024-8-5-17-17",  # 可以根据需要动态生成时间
+            }
+            await self.websocket.send(json.dumps(message))
 
     async def connect(self):
         p_ad = f"ws://{self.ip}:{self.port}"
@@ -79,36 +109,50 @@ class RunClient(object):
             self.event.set()
             return websocket
         except:
-
+            print('连接失败')
             self.connect_result='fail'
             # 发出事件信号
             self.event.set()
             return 'fail'
 
-    async def run_tasks(self):
-        websocket = await self.connect()
+    async def recv_t(self,):
+        print('接收函数开始执行',datetime.datetime.now())
+        recv_ui = None  # 接收消息前端展示函数
+        refresh_canvas = None  # 更新画布的函数
+        canvas = None  # 画布
         # 启动接收消息的任务
-        recv_task = self.receive_messages(websocket)
-        async for recv_result in recv_task:
-            print(recv_result)
+        recv = self.receive_messages(self.websocket)
+        print('已经创建接收函数的生成器')
+        print('马上遍历生成器', )
+        async for recv_result in recv:
+            print('从生成器中取出：',recv_result)
+            if recv_result['name'] == 'server':
+                # 当客户端第一次接收消息时，需要等待UI执行到某步骤才能继续执行
+                with self.condition_c:
+                    while not self.ready_c:
+                        self.condition_c.wait()  # 等待被通知执行
+                self.ready_c = False  # 将准备值修改回去
+                recv_ui = self.q.get()
+                refresh_canvas = self.q.get()
+                canvas = self.q.get()
 
-            with self.condition_c:
-                while not self.ready_c:
-                    self.condition_c.wait()  # 等待被通知执行
-            self.ready_c = False  # 将准备值修改回去
-
-            recv_ui = self.q.get()
             recv_ui(recv_result)
+            refresh_canvas(None,canvas)  # 刷新
             print('调用了receive_msg')
 
-        # 启动发送消息的任务
-        send_task = asyncio.create_task(self.send_messages(websocket))
-        # recv_task = asyncio.create_task(self.receive_messages(websocket))
+    async def run_tasks(self,):
+        self.websocket = await self.connect()  # 连接
+        print('已经创建连接')
+
+        # 创建发送消息的任务
+        recv_task = asyncio.create_task(self.recv_t())
+        send_task = asyncio.create_task(self.send_messages())
+
 
         # 等待任务完成
-        results = await send_task
-        # await asyncio.gather(send_task,recv_task)
-
+        # results = await send_task
+        result = await asyncio.gather(recv_task,send_task)
+        print(result[0], result[1])
 
 
     def get_loop(self,):
@@ -126,46 +170,3 @@ class RunClient(object):
         t.start()
 
         asyncio.run_coroutine_threadsafe(coroutine,self.loop)
-
-async def receive_messages(websocket):
-    """接收并处理服务器消息"""
-    while True:
-        try:
-            response = await websocket.recv()
-            response = json.loads(response)
-
-            print(f"\n{response['sender']}:{response['content']}")
-
-        except websockets.ConnectionClosed:
-            print("Connection with server closed")
-            break
-
-
-async def send_messages(websocket):
-    """处理用户输入并发送消息到服务器"""
-    while True:
-        user_input = await asyncio.to_thread(input, "You: ")
-        message = {
-            "sender": "lsy",
-            "type": "message",
-            "content": user_input,
-            "time": "2024-8-5-17-17",  # 可以根据需要动态生成时间
-        }
-        await websocket.send(json.dumps(message))
-
-
-async def client(ip, port, key):
-    p_ad = f"ws://{ip}:{port}"
-    uri = p_ad
-    headers = {
-        "X-Auth-Key": key  # 连接密钥
-    }
-
-    async with websockets.connect(uri, extra_headers=headers) as websocket:
-        # 启动接收消息的任务
-        receive_task = asyncio.create_task(receive_messages(websocket))
-        # 启动发送消息的任务
-        send_task = asyncio.create_task(send_messages(websocket))
-
-        # 等待任务完成
-        await asyncio.gather(receive_task, send_task)
